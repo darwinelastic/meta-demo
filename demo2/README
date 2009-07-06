@@ -1,0 +1,12 @@
+Apache 2.0 Module Developer Tutorials
+
+	A barebones module that does nothing except
+	write a silly message to stderr (meaning
+	error_log) when a GET request is processed.
+						
+	The reason this module is so trivial is
+	because most of the tutorial focusses on
+	the build environment and the logistics of
+	compiling a kernel and getting it loaded
+	into Apache.
+

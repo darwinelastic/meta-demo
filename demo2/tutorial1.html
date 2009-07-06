@@ -1,0 +1,501 @@
+<html>
+<head>
+	<link rel="stylesheet" href="http://threebit.net/style.css"/>
+	<title>Apache 2 Module Tutorial - GNU Build Tools and the Development Environment</title>
+</head>
+<body>
+
+<table cellspacing="0" width="100%" style="border: solid 1px #000000;">
+  <tr>
+    <td align="left">
+      <a href="http://threebit.net"><img alt="threebit.NET" border="0" src="http://threebit.net/logos/threebit.gif"></a>
+    </td>
+		<td width="100%" align="center" bgcolor="#f0f0f0" valign="center">
+			<font style="font: 26px Times New Roman;">Tutorial One</font>
+			<br>
+			<nobr> [<a href="http://threebit.net">threebit.net</a>] </nobr>
+			<nobr> [<a href="../../index.html">tutorial home</a>] </nobr>
+    </td>
+  </tr>
+</table>
+
+<p>
+
+<p style="border: 1px solid #000000; padding: 10px; background: #fefefe;">
+	<b>Note:</b> Someone has linked to this tutorial from the
+	<a href="http://httpd.apache.org/docs-2.0/developer/">Apache 2.0 Developer Documentation</a>.
+	This is but one in an upcoming series of tutorials - check the
+	<a href="http://threebit.net/tutorials/">main tutorial</a>
+	page for others.  For that matter, check out the main <a href="http://threebit.net">threebit</a> site.
+	-- Cheers, Kevin.
+</p>
+
+<p>
+This tutorial guides the reader through the minimal tasks
+involved in writing a module for Apache 2.  The module
+developed here has almost no functionality - it's only
+impact is the generation of a static message to
+<i>logs/errorlog</i> for each HTTP request.
+<p>
+This tutorial is not intended to showcase Apache's module API.
+Instead, it guides the reader through <i>the other</i> tasks
+that must be done to properly develop, compile and install
+a custom module - namely <b>autoconf</b> and <b>automake</b>.
+<p>
+<a href="http://threebit.net/tutorials/">Further tutorials</a> will build from this one and explore the
+advanced module API.  Drop a message to <a href="/contact.shtml">kevino at <!-- robot killer -->
+threebit.net</a> if you feel the need.
+
+<pre>
+# Throughout the tutorial, look for links to Apache's
+# LXR website <a href="http://lxr.webperf.org/">http://lxr.webperf.org/</a>
+# For example, clink on <b>AP_MODULE_DECLARE_DATA</b> below.
+module <a style="text-decoration: none;" href="http://lxr.webperf.org/ident.cgi?i=AP_MODULE_DECLARE_DATA">AP_MODULE_DECLARE_DATA</a> tut2_module;</pre>
+
+
+<h2>Preparation</h2>
+
+If you don't actually want to run or test the code in this tutorial, then feel
+free to skip this step.  Otherwise, you'll want to perform the following actions so your
+work area prepared for compiling and running the tutorial.
+
+<p>
+
+I have assumed in this tutorial that you have an account on a Linux (or Unix)
+machine and you have installed the GNU build tools (autoconf, automake, etc).
+If you haven't then you're not going to get very far - consult your OS
+documentation.
+
+<pre>
+# Prepare the temporary directory
+cd $HOME
+mkdir threebit-tutorials
+cd threebit-tutorials
+
+# Remember the tutorial home directory for later.
+export TUTORIAL_HOME=`pwd`</pre>
+
+<b>Download via HTTP</b>
+
+<pre>
+cd $TUTORIAL_HOME
+wget <a href="http://threebit.net/tutorials/tutorials.tar.gz">"http://threebit.net/tutorials/tutorials.tar.gz"</a>
+tar zxvf tutorials.tar.gz</pre>
+
+<b>Download via Anonymous CVS</b>
+
+<pre>
+cd $TUTORIAL_HOME
+CVSROOT=:pserver:anonymous@threebit.net:/usr/local/cvs
+
+# use "anonymous" as the password.
+cvs login
+
+cvs co tutorials/apache2_modules
+mv tutorials/* .
+rm -rf tutorials</pre>
+
+<b>Apache</b>
+<i>Note: You will get a "404 - Not Found" error if 2.0.43 is no longer the newest version
+of Apache.  Just substitute the current version tag if that is the case.</i>
+
+<pre>
+cd $TUTORIAL_HOME
+
+wget <a href="http://www.apache.org/dist/httpd/httpd-2.0.43.tar.gz">http://www.apache.org/dist/httpd/httpd-2.0.43.tar.gz</a>
+tar zxf httpd-2.0.43.tar.gz
+
+cd httpd-2.0.43
+./configure --prefix=$TUTORIAL_HOME/apache2 --enable-so
+make
+make install</pre>
+
+Now we will fix the <i>ServerName</i> and <i>Listen</i> configuration directives
+so that we can run this installation as an unpriviledged user.
+
+<pre>
+# store the location of the apache configuration file.
+HTTPCONF=$TUTORIAL_HOME/apache2/conf/httpd.conf
+
+# replace the ServerName directive
+cat $HTTPCONF | \
+  sed 's/#ServerName new.host.name:80/ServerName localhost/' \
+  > $HTTPCONF.new
+mv $HTTPCONF.new $HTTPCONF
+
+# replace the Listen directive.
+cat $HTTPCONF | sed 's/^Listen 80/Listen 21000/' > $HTTPCONF.new
+mv $HTTPCONF.new $HTTPCONF</pre>
+
+And test the configuration:
+<pre>
+$TUTORIAL_HOME/apache2/bin/apachectl configtest
+Syntax OK</pre>
+
+<h2>mod_tut1.c</h2>
+
+As stated above, the purpose of this module is to write
+data to the error log for each HTTP request.  We are obviously building
+a useless module - but by limiting what the module does it becomes
+easier to explain what everything is doing.
+
+<p>
+
+The <a href="mod_tut1.c">source code</a> to the module is pretty much
+self documenting but let us examine each block independently.
+
+<pre>
+/*
+ * Include the core server components.
+ */
+#include "httpd.h"
+#include "http_config.h"</pre>
+
+Obviously an Apache module will require information about structures,
+macros and functions from Apache's core.  These two header files
+are all that is required for this module, but real modules will need
+to include other header files relating to request handling, logging,
+protocols, etc.
+
+<pre>
+/*
+ * Declare and populate the module's data structure.  The
+ * name of this structure ('tut1_module') is important - it
+ * must match the name of the module.  This structure is the
+ * only "glue" between the httpd core and the module.
+ */
+module <a style="text-decoration: none;" href="http://lxr.webperf.org/ident.cgi?i=AP_MODULE_DECLARE_DATA">AP_MODULE_DECLARE_DATA</a> tut1_module =
+{
+  // Only one callback function is provided.  Real
+  // modules will need to declare callback functions for
+  // server/directory configuration, configuration merging
+  // and other tasks.
+  <a style="text-decoration: none;" href="http://lxr.webperf.org/ident.cgi?i=STANDARD20_MODULE_STUFF">STANDARD20_MODULE_STUFF</a>,
+  NULL,
+  NULL,
+  NULL,
+  NULL,
+  NULL,
+  mod_tut1_register_hooks,      /* callback for registering hooks */
+};</pre>
+
+Every module must declare it's data structure as shown above.  Since this
+module does not require any configuration most of the callback locations
+have been left blank, except for the last one - that one is invoked
+by the HTTPD core so that the module can declare other functions that
+should be invoked to handle various events (like an HTTP request).
+
+<pre>
+/*
+ * This function is a callback and it declares what 
+ * other functions should be called for request 
+ * processing and configuration requests. This 
+ * callback function declares the Handlers for 
+ * other events.
+ */
+static void mod_tut1_register_hooks (<a style="text-decoration: none;" href="http://lxr.webperf.org/ident.cgi?i=apr_pool_t">apr_pool_t</a> *p)
+{
+  // I think this is the call to make to register a 
+  // handler for method calls (GET PUT et. al.).
+  // We will ask to be last so that the comment 
+  // has a higher tendency to go at the end.
+  ap_hook_handler(mod_tut1_method_handler, NULL, NULL, APR_HOOK_LAST);
+}</pre>
+
+When this function is called by the HTTPD core, it registers a handler
+that should be invoked for all HTTP requests.
+
+<pre>
+/*
+ * This function is registered as a handler for HTTP methods and will
+ * therefore be invoked for all GET requests (and others).  Regardless
+ * of the request type, this function simply sends a message to
+ * STDERR (which httpd redirects to logs/error_log).  A real module
+ * would do *alot* more at this point.
+ */
+static int mod_tut1_method_handler (<a style="text-decoration: none;" href="http://lxr.webperf.org/source.cgi/include/httpd.h#L707">request_rec</a> *r)
+{
+  // Send a message to stderr (apache redirects this to the error log)
+  fprintf(stderr,"apache2_mod_tut1: A request was made.\n");
+
+  // We need to flush the stream for messages to appear right away.
+  // Performing an fflush() in a production system is not good for
+  // performance - don't do this for real.
+  fflush(stderr);
+
+  // Return DECLINED so that the Apache core will keep looking for
+  // other modules to handle this request.  This effectively makes
+  // this module completely transparent.
+  return <a style="text-decoration: none;" href="http://lxr.webperf.org/ident.cgi?i=DECLINED">DECLINED</a>;
+}</pre>
+
+This is the function that will be invoked for every HTTP request.
+This is where the <i>meat</i> of an Apache module should go.
+
+<h2>GNU Build Tools</h2>
+
+Looking in <i>TODO $TUTORIAL_HOME/tut1</i>, you will find some familiar files
+that are included with most GNU applications.
+<p>
+
+<table>
+	<tr>
+		<th align="left"><a href="Makefile.am">Makefile.am</a></th>
+		<td>An input file for <i>automake</i></td>
+	</tr>
+	<tr>
+		<th align="left"><a href="configure.in">configure.in</a></th>
+		<td>An inputfile to <i>autoconf</i>.</td>
+	</tr>
+	<tr>
+		<th align="left"><a href="mod_tut1.c">mod_tut1.c</a></th>
+		<td>The source code to the tutorial module.</td>
+	</tr>
+	<tr>
+		<th align="left">tutorial1.html</th>
+		<td>This file.</td>
+	</tr>
+	<tr>
+		<td colspan="2" align="left">
+		<i><b>The remaining files can safely be ignored.</b></i>
+		</td>
+	</tr>
+	<tr>
+		<th align="left">AUTHORS</th>
+		<td>automake will produce warnings if this file is not present.</td>
+	</tr>
+	<tr>
+		<th align="left">COPYING</th>
+		<td>The GPL license.  automake will complain if this file is not present.</td>
+	</tr>
+	<tr>
+		<th align="left">CVS/</th>
+		<td>CVS state directory.  Ignore it.  If you downloaded the tutorial using the tar ball then it won't even exist.</td>
+	</tr>
+	<tr>
+		<th align="left">ChangeLog</th>
+		<td>Another automake file.</td>
+	</tr>
+	<tr>
+		<th align="left">INSTALL</th>
+		<td>Standard install instructions.  In this case, it points the reader to this file.</td>
+	</tr>
+	<tr>
+		<th align="left">NEWS</th>
+		<td>Another automake file.</td>
+	</tr>
+	<tr>
+		<th align="left">README</th>
+		<td>Another automake file.</td>
+	</tr>
+</table>
+
+<p>
+This tutorial does not aim to be a complete reference for the GNU build tools.
+See the following references for information.
+<ul>
+
+	<li>
+	<a href="http://sources.redhat.com/autobook/">GNU Autoconf, Automake and Libtool</a><br/>
+	http://sources.redhat.com/autobook/
+	</li>
+	<li>
+
+	<a href="http://www.gnu.org/manual/autoconf/">GNU Autoconf</a><br/>
+	http://www.gnu.org/manual/autoconf/
+	</li>
+	<li>
+	<a href="http://www.gnu.org/manual/automake/">GNU Automake</a><br/>
+	http://www.gnu.org/manual/automake/
+	</li>
+	<li>
+	<a href="http://www.gnu.org/manual/libtool/">GNU Libtool</a><br/>
+	http://www.gnu.org/manual/libtool/
+	</li>
+</ul>
+
+Aside from the module source code itself, the only files of interest to the reader
+are <b>configure.in</b> and <b>Makefile.am</b>.
+To briefly discuss these files without duplicating documetation contained in the above references:
+<p>
+<b>configure.in</b> is an input file to <b>autoconf</b> and is used to configure the
+module source code and dependencies for each target platform.  Running <b>autoconf</b>
+creates the <b>configure</b> script we are all so familiar with.
+<p>
+<b>Makefile.am</b> is an input file to <b>automake</b> and is used to create a <b>Makefile.in</b>
+file.  The Makefile.in file is then used by <b>configure</b> to create real <b>Makefile</b>'s.
+<p>
+If you're confused - have no fear because I still am!
+You probably don't need to understand everything - just plug away through the tutorial.  If you
+want to understand what's going on, I suggest you read the references cited above.
+
+<h2>configure.in</h2>
+
+I would be lying to you if I told you that I understand everything in this file.  However,
+it seems to work so I'll tell you what I know. :)  See <a href="configure.in">configure.in</a>
+for raw file.
+
+<pre>AC_INIT</pre>
+
+The mandatory autoconf initialization macro.
+
+<pre>
+# Automake initialization
+AM_INIT_AUTOMAKE(mod_tut1, 1.0)</pre>
+
+This macro is provided by automake and is required when automake is used.  The
+arguments are the package name and version number.  I have provided reasonable
+values for the parameters but still haven't figured out what their impact is.
+
+<pre>
+AC_PROG_CC
+AM_PROG_LIBTOOL</pre>
+
+These two macros add checks for suitable <b>cc</b> and <b>libtool</b> programs.
+
+<pre>
+AC_DEFUN([APACHE_DIR],[
+
+  AC_ARG_WITH(
+    apache,
+    [  --with-apache[=DIR]     Apache server directory],
+    ,
+    [with_apache="no"]
+  )
+
+  AC_MSG_CHECKING(for Apache directory)
+
+  if test "$with_apache" = "no"; then
+    AC_MSG_ERROR( Specify the apache using --with-apache)
+  else
+    # make sure that a well known include file exists
+    if test -e $with_apache/include/httpd.h; then
+      apache_dir=$with_apache
+      AC_MSG_RESULT(APACHE found!)
+    else
+      AC_MSG_ERROR( $with_apache not found. )
+    fi
+  fi
+
+])</pre>
+
+This declares a new autoconf macro named <i>APACHE_DIR</i>.  It is used to handle the
+<i>--with-apache=/usr/local/apache2</i> argument to <i>configure</i>.
+
+<pre>APACHE_DIR</pre>
+
+This runs the <i>APACHE_DIR</i> macro that was just defined.
+When successfull, the directory location is stored in <i>apache_dir</i>.
+
+<pre>AC_SUBST(apache_dir) </pre>
+
+Not all variables that are set in shell snippets are persisted to the configuration status
+file (config.status).  This call to AC_SUBST persists the value of <i>apache_dir</i>.
+
+<pre>AC_OUTPUT(Makefile)</pre>
+
+Finally, <i>AC_OUTPUT()</i> saves the results of the configuration and causes a real
+Makefile to be generated.
+
+
+<h2>Makefile.am</h2>
+This file is used by <b>automake</b> to generate a <b>Makefile.in</b> file.  As stated
+earlier, Makefile.in is then parsed using an invocation of <b>configure</b> to create
+an actual <b>Makefile</b>.
+<p>
+Since writing an Apache module is the same as writing, compiling and linking any standard
+shared library, <b>automake</b> is well suited to the task.
+<p>
+Again, consult the full automake documentation for all the info.
+See the raw <a href="Makefile.am">Makefile.am</a>.
+
+<pre>lib_LTLIBRARIES = libmodtut1.la</pre>
+
+This tells automake that we are creating a shared library named <b>libmottut1.la</b>.
+
+<pre>libmodtut1_la_SOURCES = mod_tut1.c</pre>
+
+This tells automake what source files should be compiled as part of the library.  In this
+case there is only one, but there could be serveral.
+
+<pre>INCLUDES = -I@apache_dir@/include</pre>
+
+Header files from the apache distribution are required when compiling the module.  This
+directive provides a list of include directories to pass on to <b>gcc</b>.  Does
+<i>apache_dir</i> look familiar?  If you said yes, then step to the front of the class -
+<b>configure</b> will subsitute the value that was passed in with <b>--with-apache</b>
+when the Makefile is written.
+
+<h2>aclocal, autoconf, automake</h2>
+
+Now that you have some idea of what those files mean we can run the utilities that
+use them.
+<p>
+<b>aclocal</b> is used to import macros defined by automake so that autoconf can understand what's going on.
+<pre>
+cd $TUTORIAL_HOME/apache2_modules/tut1
+
+# import automake m4 macros.
+aclocal
+
+# create configure based on configure.in
+autoconf
+
+# create Makefile.in based on Makefile.am and configure.in
+automake -a</pre>
+
+<h2>configure</h2>
+
+Now we can run <b>configure</b> to prepare the module's <b>Makefile</b>.
+
+<pre>
+# The ubiquitous configure script
+./configure --with-apache=$TUTORIAL_HOME/apache2</pre>
+
+<h2>make</h2>
+
+And now we can run <b>make</b> to compile the module.
+<b>Note:</b> don't run <b>make install</b>.  We'll handle
+the module installation later.
+<pre>make</pre>
+
+<h2>apxs</h2>
+
+<b>** DO NOT RUN <i>make install</i> **</b>
+Ordinarially you would, but the install step for an Apache module is different.
+Instead, <b>apxs</b> is used to register the module in <i>httpd.conf</i> and move the
+shared object into the apache lib directory.
+
+<pre>$TUTORIAL_HOME/apache2/bin/apxs -i -a -n tut1 libmodtut1.la</pre>
+
+<b>apxs</b> also addes the following line to <b>httpd.conf</b>:
+
+<pre>LoadModule tut1_module        modules/libmodtut1.so</pre>
+
+<h2>Run Apache</h2>
+Now we are ready to run Apache and test the module.
+
+<pre>
+# Change to the apache directory
+cd $TUTORIAL_HOME/apache2
+
+# Start Apache
+bin/apachectl start
+
+# Use Lynx to hit the web server.
+lynx --source http://localhost:21000 | grep success
+
+# Look for the module's message in the error log
+cat logs/error_log | grep tut1
+<i>apache2_mod_tut1: A request was made.</i></pre>
+
+<h2>Success!</h2>
+The tutorial one module has been successfully compiled and installed into the
+Apache 2 runtime.
+
+<p>
+$Id: tutorial1.html,v 1.18 2002/10/28 07:24:08 kevino Exp $
+
+
+</body>
+</html>
